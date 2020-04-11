@@ -4,16 +4,12 @@
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
-#define SPEED_FACTOR 0.8
+#define SPEED_FACTOR 1
 
 double motor1SpeedFactor = 1;
 double motor2SpeedFactor = 1;
 
 MPU6050 sensor;
-
-// Valores RAW (sin procesar) del acelerometro y giroscopio en los ejes x,y,z
-int ax, ay, az;
-int gx, gy, gz;
 
 // MPU control/status vars
 bool dmpReady = false; // set true if DMP init was successful
@@ -29,7 +25,7 @@ VectorFloat gravity; // [x, y, z] gravity vector
 float ypr[3]; // [yaw, pitch, roll] yaw/pitch/roll container and gravity vector
 
 //PID
-double originalSetpoint = 270;
+double originalSetpoint = 181.5;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0.1;
 double input, output;
@@ -42,8 +38,7 @@ PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
 
 volatile bool mpuInterrupt = false; // indicates whether MPU interrupt pin has gone high
 
-void dmpDataReady()
-{
+void dmpDataReady() {
   mpuInterrupt = true;
 }
 
@@ -55,18 +50,17 @@ void dmpDataReady()
 const int AIA = 5;  // (pwm) pin 6 conectado a pin A-IA 
 const int AIB = 6;  // (pwm) pin 5 conectado a pin A-IB 
 const int BIA = 9; // (pwm) pin 10 conectado a pin B-IA  
-const int BIB = 10;  // (pwm) pin 9 conectado a pin B-IB 
+const int BIB = 10;  // (pwm) pin 9 conectado a pin B-IB
+ 
 //MOTOR CONTROLLER
 MotorController motorController1(AIA, AIB, false);
 MotorController motorController2(BIA, BIB, false);
-
-byte velocidad = 160;  
+  
 // cambie este valor (100 a 255) para controlar 
 // la velocidad de los motores 
 
 void setup() {
   initializeIMU();
-  initializeMotors();
 }
 
 void initializeIMU() {
@@ -77,34 +71,12 @@ void initializeIMU() {
   if (sensor.testConnection()) Serial.println("Sensor iniciado correctamente");
   else Serial.println("Error al iniciar el sensor");
 
- 
-  sensor.setXAccelOffset(-1826);
-  sensor.setYAccelOffset(2038);
-  sensor.setZAccelOffset(1026);
-
-  sensor.setXGyroOffset(-60);
-  sensor.setYGyroOffset(-15);
-  sensor.setZGyroOffset(-70);
- 
-
-  // CALIBRACION ACOSTADO: -1826 2038  1026  -60 -15 -70
-  // CALIBRACION PARADO: -3727  2081  2622  -60 -15 -81
-
-/*
-  sensor.setXAccelOffset(-3727);
-  sensor.setYAccelOffset(2081);
-  sensor.setZAccelOffset(2622);
-
-  sensor.setXGyroOffset(-60);
-  sensor.setYGyroOffset(-15);
-  sensor.setZGyroOffset(-81);
-*/
-
+  calibrateOffset();
+  
   devStatus = sensor.dmpInitialize();
   
   // make sure it worked (returns 0 if so)
-  if (devStatus == 0)
-  {
+  if (devStatus == 0) {
     // turn on the DMP, now that it's ready
     sensor.setDMPEnabled(true);
 
@@ -119,9 +91,7 @@ void initializeIMU() {
     packetSize = sensor.dmpGetFIFOPacketSize();
 
     //setup PID
-    pid.SetMode(AUTOMATIC);
-    pid.SetSampleTime(10);
-    pid.SetOutputLimits(-255, 255); 
+    initializePID();
   } else {
     // ERROR!
     // 1 = initial memory load failed
@@ -133,28 +103,51 @@ void initializeIMU() {
   }
 }
 
-void initializeMotors() {
-  pinMode(AIA, OUTPUT); // fijar los pines como salidas
-  pinMode(AIB, OUTPUT);
-  pinMode(BIA, OUTPUT);
-  pinMode(BIB, OUTPUT);
-  
+void calibrateOffset() {
+  // CALIBRACION ACOSTADO: -1826 2038  1026  -60 -15 -70
+  // CALIBRACION PARADO: -3727  2081  2622  -60 -15 -81
+
+ 
+  sensor.setXAccelOffset(-1826);
+  sensor.setYAccelOffset(2038);
+  sensor.setZAccelOffset(1026);
+
+  sensor.setXGyroOffset(-60);
+  sensor.setYGyroOffset(-15);
+  sensor.setZGyroOffset(-70);
+
+ /*
+  sensor.setXAccelOffset(-3727);
+  sensor.setYAccelOffset(2081);
+  sensor.setZAccelOffset(2622);
+
+  sensor.setXGyroOffset(-60);
+  sensor.setYGyroOffset(-15);
+  sensor.setZGyroOffset(-81);
+  */
 }
 
-void loop() {
-  //ejecutarMovimientos();
-  //transmitirDatos();
-  
+void initializePID() {
+  pid.SetMode(AUTOMATIC);
+  pid.SetSampleTime(10);
+  pid.SetOutputLimits(-255, 255);   
+}
+
+void loop() {  
   // if programming failed, don't try to do anything
   if (!dmpReady) return;
   
   // wait for MPU interrupt or extra packet(s) available
-  while (!mpuInterrupt && fifoCount < packetSize)
-  {
+  while (!mpuInterrupt && fifoCount < packetSize) {
     //no mpu data - performing PID calculations and output to motors 
     pid.Compute();
-    motorController1.set(motor1SpeedFactor * SPEED_FACTOR * (output/255));
-    motorController2.set(motor2SpeedFactor * SPEED_FACTOR * (output/255));
+    double speed = -output/255.0;
+
+    Serial.print(speed);Serial.print('\t');
+    Serial.println(input);
+
+    motorController1.set(motor1SpeedFactor * SPEED_FACTOR * speed);
+    motorController2.set(motor1SpeedFactor * SPEED_FACTOR * speed);
   }
 
   // reset interrupt flag and get INT_STATUS byte
@@ -165,8 +158,7 @@ void loop() {
   fifoCount = sensor.getFIFOCount();
 
   // check for overflow (this should never happen unless our code is too inefficient)
-  if ((mpuIntStatus & 0x10) || fifoCount == 1024)
-  {
+  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
     // reset so we can continue cleanly
     sensor.resetFIFO();
     Serial.println(F("FIFO overflow!"));
@@ -186,74 +178,11 @@ void loop() {
     sensor.dmpGetQuaternion(&q, fifoBuffer);
     sensor.dmpGetGravity(&gravity, &q);
     sensor.dmpGetYawPitchRoll(ypr, &q, &gravity);
-    input = ypr[2] * 180/M_PI + 180;
+    
+    double yaw = ypr[0] * 180/M_PI + 180;
+    double pitch = ypr[1] * 180/M_PI + 180;
+    double roll = ypr[2] * 180/M_PI + 180;
+
+    input = pitch;
   }
-}
-
-void leerSensor() {
-  // Leer las aceleraciones y velocidades angulares
-  sensor.getAcceleration(&ax, &ay, &az);
-  sensor.getRotation(&gx, &gy, &gz);  
-  
-}
-
-void transmitirDatos() {
-  leerSensor();
-  //Mostrar las lecturas separadas por un [tab]
-  Serial.print("a[x y z] g[x y z]:\t");
-  Serial.print(ax); Serial.print("\t");
-  Serial.print(ay); Serial.print("\t");
-  Serial.print(az); Serial.print("\t");
-  Serial.print(gx); Serial.print("\t");
-  Serial.print(gy); Serial.print("\t");
-  Serial.println(gz);
-
-  delay(100);
-
-}
-
-void ejecutarMovimientos() {
-  izquierda();
-  delay(1000);
-  derecha();
-  delay(1000);
-  avanzar();
-  delay(1000);
-  retroceder();
-  delay(1000);
-  avanzar();
-  delay(1000);
-  
-}
-
-void avanzar()
-{
-  analogWrite(AIB, 0);
-  analogWrite(AIA, velocidad);
-  analogWrite(BIB, 0);
-  analogWrite(BIA, velocidad);
-}
-
-void retroceder()
-{
-  analogWrite(AIB, velocidad);
-  analogWrite(AIA, 0);
-  analogWrite(BIB, velocidad);
-  analogWrite(BIA, 0);
-}
-
-void izquierda()
-{
-  analogWrite(AIA, velocidad);
-  analogWrite(AIB, 0);
-  analogWrite(BIA, 0);
-  analogWrite(BIB, velocidad);
-}
-
-void derecha()
-{
-  analogWrite(AIA, 0);
-  analogWrite(AIB, velocidad);
-  analogWrite(BIA, velocidad);
-  analogWrite(BIB, 0);
 }
