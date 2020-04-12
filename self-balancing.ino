@@ -1,3 +1,5 @@
+#include <StringSplitter.h>
+
 #include "Wire.h"
 #include <PID_v1.h>
 #include <MotorController.h>
@@ -27,7 +29,7 @@ float ypr[3]; // [yaw, pitch, roll] yaw/pitch/roll container and gravity vector
 //PID
 double originalSetpoint = 181.5;
 double setpoint = originalSetpoint;
-double movingAngleOffset = 0.1;
+double movingAngleOffset = 0;
 double input, output;
 
 //adjust these values to fit your own design
@@ -134,6 +136,19 @@ void initializePID() {
 }
 
 void loop() {  
+  if (Serial.available()) {
+    String newConfig = Serial.readString();
+
+    StringSplitter *splitter = new StringSplitter(newConfig, ',', 4);
+    double newKp = splitter->getItemAtIndex(0).toDouble();
+    double newKd = splitter->getItemAtIndex(1).toDouble();
+    double newKi = splitter->getItemAtIndex(2).toDouble();
+    double newMovingAngleOffset = splitter->getItemAtIndex(3).toDouble();
+
+    pid.SetTunings(newKp, newKd, newKi);
+    movingAngleOffset = newMovingAngleOffset;
+
+  }
   // if programming failed, don't try to do anything
   if (!dmpReady) return;
   
@@ -183,6 +198,6 @@ void loop() {
     double pitch = ypr[1] * 180/M_PI + 180;
     double roll = ypr[2] * 180/M_PI + 180;
 
-    input = pitch;
+    input = pitch + movingAngleOffset;
   }
 }
