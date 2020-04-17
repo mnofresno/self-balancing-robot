@@ -8,6 +8,7 @@
 
 #define SPEED_FACTOR 1
 
+int errorCount = 0;
 double motor1SpeedFactor = 1;
 double motor2SpeedFactor = 1;
 
@@ -27,15 +28,15 @@ VectorFloat gravity; // [x, y, z] gravity vector
 float ypr[3]; // [yaw, pitch, roll] yaw/pitch/roll container and gravity vector
 
 //PID
-double originalSetpoint = 181.5;
+double originalSetpoint = 181.7;
 double setpoint = originalSetpoint;
 double movingAngleOffset = 0;
-double input, output;
+double input = -1, output;
 
 //adjust these values to fit your own design
-double Kp = 10;   
-double Kd = 0;
-double Ki = 0;
+double Kp = 90;   
+double Kd = 2.5;
+double Ki = 90;
 PID pid(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
 
 volatile bool mpuInterrupt = false; // indicates whether MPU interrupt pin has gone high
@@ -63,10 +64,12 @@ MotorController motorController2(BIA, BIB, false);
 
 void setup() {
   initializeIMU();
+  pinMode(LED_BUILTIN, OUTPUT);
 }
 
 void initializeIMU() {
   Serial.begin(57600);    //Iniciando puerto serial
+  Serial.setTimeout(10000);
   Wire.begin();           //Iniciando I2C  
   sensor.initialize();    //Iniciando el sensor
 
@@ -135,36 +138,45 @@ void initializePID() {
   pid.SetOutputLimits(-255, 255);   
 }
 
-void loop() {  
+void loop() {
   if (Serial.available()) {
-    String newConfig = Serial.readString();
-
-    StringSplitter *splitter = new StringSplitter(newConfig, ',', 4);
-    double newKp = splitter->getItemAtIndex(0).toDouble();
-    double newKd = splitter->getItemAtIndex(1).toDouble();
-    double newKi = splitter->getItemAtIndex(2).toDouble();
-    double newMovingAngleOffset = splitter->getItemAtIndex(3).toDouble();
-
-    pid.SetTunings(newKp, newKd, newKi);
-    movingAngleOffset = newMovingAngleOffset;
-
+    updateParameters();
   }
   // if programming failed, don't try to do anything
   if (!dmpReady) return;
-  
+  updateMeasurements();
+  if (isInErrorCondition()) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    motorController1.set(0);
+    motorController2.set(0);
+    return; 
+  } else {
+    digitalWrite(LED_BUILTIN, LOW);
+  }
+  powerMotors();
+}
+
+bool isInErrorCondition() {
+  double errorPercentage = 100 * (abs(input - setpoint) / setpoint);
+  return errorPercentage > 25;
+}
+
+void powerMotors() {
   // wait for MPU interrupt or extra packet(s) available
   while (!mpuInterrupt && fifoCount < packetSize) {
     //no mpu data - performing PID calculations and output to motors 
     pid.Compute();
     double speed = -output/255.0;
 
-    Serial.print(speed);Serial.print('\t');
-    Serial.println(input);
+    //Serial.print(speed);Serial.print('\t');
+    //Serial.println(input);
 
     motorController1.set(motor1SpeedFactor * SPEED_FACTOR * speed);
     motorController2.set(motor1SpeedFactor * SPEED_FACTOR * speed);
   }
+}
 
+void updateMeasurements() {
   // reset interrupt flag and get INT_STATUS byte
   mpuInterrupt = false;
   mpuIntStatus = sensor.getIntStatus();
@@ -194,10 +206,33 @@ void loop() {
     sensor.dmpGetGravity(&gravity, &q);
     sensor.dmpGetYawPitchRoll(ypr, &q, &gravity);
     
-    double yaw = ypr[0] * 180/M_PI + 180;
+    //double yaw = ypr[0] * 180/M_PI + 180;
     double pitch = ypr[1] * 180/M_PI + 180;
-    double roll = ypr[2] * 180/M_PI + 180;
+    //double roll = ypr[2] * 180/M_PI + 180;
 
-    input = pitch + movingAngleOffset;
+    input = pitch;
   }
+}
+
+void updateParameters() {
+  String newConfig = Serial.readString();
+
+  StringSplitter *splitter = new StringSplitter(newConfig, ':', 4);
+  double newKp = splitter->getItemAtIndex(0).toDouble();
+  double newKd = splitter->getItemAtIndex(1).toDouble();
+  double newKi = splitter->getItemAtIndex(2).toDouble();
+  double newSetPoint = splitter->getItemAtIndex(3).toDouble();
+
+  void (*printDouble)(double valToPrint);
+
+  printDouble = [](double valToPrint) { Serial.print(String(valToPrint)); };
+
+  Serial.println('new configs: ');
+  Serial.print('KP: '); printDouble(newKp); Serial.print('\t');
+  Serial.print('KD: '); printDouble(newKd); Serial.print('\t');
+  Serial.print('KI: '); printDouble(newKi); Serial.print('\t');
+  Serial.print('SetPoint: '); printDouble(newSetPoint); Serial.print('\n');
+  
+  pid.SetTunings(newKp, newKd, newKi);
+  setpoint = newSetPoint;
 }
